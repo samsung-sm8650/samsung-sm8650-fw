@@ -1,0 +1,209 @@
+name: Check firmware update
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - model: "SM-F7410"
+            region: "CHC"
+            imei: "355550206369832"
+          - model: "SM-F7410"
+            region: "TGY"
+            imei: "355550206369832"
+          - model: "SM-F741B"
+            region: "EUX"
+            imei: "353936441838487"
+          - model: "SC-54E"
+            region: "DCM"
+            imei: "355301830187376"
+          - model: "SCG29"
+            region: "KDI"
+            imei: "351760920106733"
+          - model: "SM-F741N"
+            region: "KOO"
+            imei: "351022211103998"
+          - model: "SM-F741Q"
+            region: "SJP"
+            imei: "352167840123732"
+          - model: "SM-F9560"
+            region: "CHC"
+            imei: "357658700042397"
+          - model: "SM-F9560"
+            region: "TGY"
+            imei: "357658700042397"
+          - model: "SM-F956B"
+            region: "EUX"
+            imei: "351788410109081"
+          - model: "SC-55E"
+            region: "DCM"
+            imei: "353064742113748"
+          - model: "SCG28"
+            region: "KDI"
+            imei: "353485400142598"
+          - model: "SM-F956N"
+            region: "KOO"
+            imei: "350591860606213"
+          - model: "SM-F956Q"
+            region: "SJP"
+            imei: "353430774103503"
+          - model: "SM-S9210"
+            region: "CHC"
+            imei: "356388243285912"
+          - model: "SM-S9210"
+            region: "TGY"
+            imei: "356388243285912"
+          - model: "SC-51E"
+            region: "DCM"
+            imei: "354372641263046"
+          - model: "SCG25"
+            region: "KDI"
+            imei: "352615800769555"
+          - model: "SM-S921Q"
+            region: "SJP"
+            imei: "355494530537956"
+          - model: "SM-S9260"
+            region: "CHC"
+            imei: "350521743116312"
+          - model: "SM-S9260"
+            region: "TGY"
+            imei: "350521743116312"
+          - model: "SM-S9280"
+            region: "CHC"
+            imei: "355862230464723"
+          - model: "SM-S9280"
+            region: "TGY"
+            imei: "355862230464723"
+          - model: "SM-S928B"
+            region: "EUX"
+            imei: "352623854917906"
+          - model: "SC-52E"
+            region: "DCM"
+            imei: "355870540492409"
+          - model: "SCG26"
+            region: "KDI"
+            imei: "355303380223320"
+          - model: "SM-S928N"
+            region: "KOO"
+            imei: "353956350718710"
+          - model: "SM-S928Q"
+            region: "SJP"
+            imei: "355015210082664"
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Compare latest version with current version
+      run: |
+       need_update=0
+       latest=`curl --retry 5 --retry-delay 5 http://fota-cloud-dn.ospserver.net/firmware/${{ matrix.region }}/${{ matrix.model }}/version.xml | grep latest | sed 's/^[^>]*>//' | sed 's/<.*//'`
+       latest_short=`echo $latest | cut -d'/' -f1`
+       latest_modem=`echo $latest | cut -d'/' -f3`
+       current=`cat current.${{ matrix.model }}_${{ matrix.region }}` || need_update=1
+       [[ $latest != $current ]] && need_update=1
+       echo "latest_version=$latest" >> $GITHUB_ENV
+       echo "latest_shortversion=$latest_short" >> $GITHUB_ENV
+       echo "latest_modemversion=$latest_modem" >> $GITHUB_ENV
+       echo "need_update=$need_update" >> $GITHUB_ENV
+
+    - name: Free up disk space
+      if: env.need_update == 1
+      run: |
+          echo "Removing swap"
+          sudo swapoff -a
+          sudo rm -f /swapfile
+          echo "Removing boost & tools"
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          echo "Removing dotnet"
+          sudo rm -rf /usr/share/dotnet/shared/
+          sudo rm -rf /usr/share/dotnet/host/
+          sudo rm -rf /usr/share/dotnet/sdk/
+          echo "Removing Android SDK"
+          sudo rm -rf "$ANDROID_SDK_ROOT"
+          sudo rm -rf /usr/local/lib/android
+          echo "Removing swift"
+          sudo rm -rf "$SWIFT_PATH"
+          sudo rm -rf /usr/share/swift
+          echo "Running apt-get clean"
+          sudo apt-get clean
+          echo "Pruning Docker data"
+          docker system prune -a -f --volumes
+
+    - name: Use Node.js
+      if: env.need_update == 1
+      uses: actions/setup-node@v4
+      with:
+        node-version: 'latest'
+
+    - name: Install dependencies
+      if: env.need_update == 1
+      run: sudo wget -O /usr/bin/samfirm https://github.com/DavidArsene/samfirm.js/releases/download/v0.3.0/samfirm.js && sudo chmod +x /usr/bin/samfirm
+
+    - name: Fetch firmware
+      if: env.need_update == 1
+      run: samfirm -m ${{ matrix.model }} -r ${{ matrix.region }} -i ${{ matrix.imei }}
+
+    - name: Get path of files
+      if: env.need_update == 1
+      run: |
+       echo "ap_tar=`find -name AP*`" >> $GITHUB_ENV
+       echo "bl_tar=`find -name BL*`" >> $GITHUB_ENV
+       echo "cp_tar=`find -name CP*`" >> $GITHUB_ENV
+
+    - name: Check contents of downloaded firmware
+      if: env.need_update == 1
+      run: |
+       tar tvf ${{ env.ap_tar }}
+       tar tvf ${{ env.bl_tar }}
+       tar tvf ${{ env.cp_tar }} || true
+
+    - name: Remove unwanted files from AP and BL
+      if: env.need_update == 1
+      run: |
+       tar vf ${{ env.ap_tar }} --delete boot.img.lz4 dtbo.img.lz4 init_boot.img.lz4 recovery.img.lz4 super.img.lz4 userdata.img.lz4 vbmeta_system.img.lz4 vendor_boot.img.lz4 meta-data
+       md5sum ${{ env.ap_tar }} | sed "s/  .*\//  /;s/\.md5$//" >> ${{ env.ap_tar }}
+       tar vf ${{ env.bl_tar }} --delete vbmeta.img.lz4
+       md5sum ${{ env.bl_tar }} | sed "s/  .*\//  /;s/\.md5$//" >> ${{ env.bl_tar }}
+
+    - name: Update current version
+      if: env.need_update == 1
+      run: |
+       git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+       git config --local user.name "github-actions[bot]"
+       git pull origin ${{github.ref}} --ff-only
+       echo ${{ env.latest_version }} > current.${{ matrix.model }}_${{ matrix.region }}
+       git add current.${{ matrix.model }}_${{ matrix.region }}
+       git commit -m "${{ matrix.model }}: ${{ env.latest_version }}"
+       git tag "${{ env.latest_shortversion }}_${{ matrix.region }}"
+
+    - name: Push changes to repo
+      if: env.need_update == 1
+      uses: ad-m/github-push-action@master
+      with:
+       tags: true
+       github_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload release assets
+      if: env.need_update == 1
+      uses: softprops/action-gh-release@v1
+      env:
+       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+       tag_name: "${{ env.latest_shortversion }}_${{ matrix.region }}"
+       files: |
+        ${{ env.ap_tar }}
+        ${{ env.bl_tar }}
+        ${{ env.cp_tar }}
